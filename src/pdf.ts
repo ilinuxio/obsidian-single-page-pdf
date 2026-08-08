@@ -9,7 +9,7 @@ import type { WebviewElement, WebviewWindow, PrintOptions, Dimensions, Measureme
 // ── Create Webview ───────────────────────────────────────
 
 function createWebview(): WebviewElement {
-  const webview = document.createElement("webview") as unknown as WebviewElement;
+  const webview = createEl("webview" as keyof HTMLElementTagNameMap) as unknown as WebviewElement;
   webview.src = "app://obsidian.md/help.html";
   webview.className = "pdf-npb-webview";
   webview.setAttribute(
@@ -99,11 +99,11 @@ export class ExportPdfModal extends Modal {
 
     // ── Right: Controls ──
     const controls = wrapper.createDiv({ cls: "pdf-npb-controls" });
-    controls.createEl("div", { cls: "pdf-npb-file-info", text: `📄 ${this.file.basename}` });
+    controls.createDiv({ cls: "pdf-npb-file-info", text: `📄 ${this.file.basename}` });
 
     const dimEl = controls.createDiv({ cls: "pdf-npb-dimensions" });
-    dimEl.createEl("div", { text: this.i18n.pageDimensions });
-    const dimValue = dimEl.createEl("div", { cls: "pdf-npb-dim-value" });
+    dimEl.createDiv({ text: this.i18n.pageDimensions });
+    const dimValue = dimEl.createDiv({ cls: "pdf-npb-dim-value" });
     dimValue.setText(this.i18n.measuring);
 
     const btnWrapper = controls.createDiv({ cls: "pdf-npb-btn-wrapper" });
@@ -119,7 +119,7 @@ export class ExportPdfModal extends Modal {
       const { doc } = await renderMarkdown(this.pluginApp, this.file);
 
       this.webview = createWebview();
-      webviewWrapper.appendChild(this.webview as unknown as Node);
+      webviewWrapper.appendChild(this.webview);
 
       // Wait for webview ready
       await new Promise<void>((resolve) => {

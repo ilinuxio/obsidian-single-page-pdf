@@ -16,7 +16,7 @@ function generateDocId(n: number): string {
 
 function getFrontMatter(app: App, file: TFile): FrontMatterCache {
   const cache = app.metadataCache.getFileCache(file);
-  return cache?.frontmatter ?? ({} as FrontMatterCache);
+  return cache?.frontmatter ?? {};
 }
 
 function getCssclasses(frontMatter: FrontMatterCache): string[] {
@@ -98,11 +98,11 @@ export async function renderMarkdown(
     cls: "markdown-preview-view markdown-rendered" + cssclasses.join(" "),
   });
 
-  const vaultConfig = app.vault as unknown as { getConfig: (key: string) => unknown };
-  viewEl.toggleClass("rtl", vaultConfig.getConfig("rightToLeft") as boolean);
-  viewEl.toggleClass("show-properties", "hidden" !== (vaultConfig.getConfig("propertiesInDocument") as string));
+  const vaultConfig = app.vault as unknown as { getConfig: (key: string) => boolean | string };
+  viewEl.toggleClass("rtl", vaultConfig.getConfig("rightToLeft") === true);
+  viewEl.toggleClass("show-properties", "hidden" !== vaultConfig.getConfig("propertiesInDocument"));
 
-  const title = frontMatter?.title ?? file.basename;
+  const title: string = (frontMatter?.title as string) ?? file.basename;
   viewEl.createEl("h1", { text: title }, (e) => e.addClass("__title__"));
 
   // Add block IDs
@@ -133,14 +133,14 @@ export async function renderMarkdown(
 
   const promises: Promise<void>[] = [];
   try {
-    await MarkdownRenderer.render(app, lines.join("\n"), fragment as unknown as HTMLElement, file.path, comp);
+    await MarkdownRenderer.render(app, lines.join("\n"), fragment as HTMLElement, file.path, comp);
   } catch {
     // Expected - fragment trick
   }
 
   const el = createFragment();
   Array.from(fragment.children ?? []).forEach((item) => {
-    el.createDiv({}, (t) => t.appendChild(item as unknown as Node));
+    el.createDiv({}, (t) => t.appendChild(item));
   });
   viewEl.appendChild(el);
 
@@ -172,7 +172,7 @@ export async function renderMarkdown(
   // Convert canvas to images
   for (const canvas of Array.from(printEl.querySelectorAll("canvas"))) {
     const dataUrl = canvas.toDataURL();
-    const img = document.createElement("img");
+    const img = printEl.createEl("img");
     img.src = dataUrl;
     img.className = "__canvas__";
     canvas.replaceWith(img);
@@ -182,17 +182,15 @@ export async function renderMarkdown(
   const doc = document.implementation.createHTMLDocument("document");
   doc.body.appendChild(printEl.cloneNode(true));
 
-  // Inject user font as a <style> in doc.head
+  // Inject user font via inline style on body (avoid creating style element)
   if (textFont) {
-    const fontStyle = doc.createElement("style");
-    fontStyle.textContent = `body,.markdown-preview-view,.markdown-rendered,p,li,td,th,a,span,blockquote{font-family:${textFont}!important}`;
-    doc.head.appendChild(fontStyle);
+    doc.body.style.setProperty("font-family", textFont, "important");
   }
 
   printEl.detach();
   comp.unload();
   printEl.remove();
-  doc.title = title;
+  (doc as { title: string }).title = title;
 
   return { doc, frontMatter };
 }
