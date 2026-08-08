@@ -1,0 +1,18 @@
+export default {
+  exportCurrentFile: "导出当前文件为 单页 PDF",
+  exportFileMenu: "导出为 单页 PDF",
+  exportTitle: "导出为 单页 PDF",
+  rendering: "渲染中...",
+  pageDimensions: "页面尺寸（自动计算）：",
+  measuring: "计算中...",
+  exportPdf: "导出 PDF",
+  exporting: "导出中...",
+  a4Width: "宽度",
+  contentHeight: "高度",
+  auto: "自动",
+  contentNotReady: "内容未就绪",
+  exportFailed: "导出失败",
+  renderError: "渲染 Markdown 生成 PDF 失败",
+  notAvailable: "当前 webview 不支持 printToPDF",
+  fileEmpty: "文件内容为空",
+};

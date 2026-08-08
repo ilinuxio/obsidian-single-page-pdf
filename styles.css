@@ -1,0 +1,102 @@
+/* ── PDF No Page Break Plugin Styles ── */
+
+.pdf-npb-wrapper {
+  display: flex;
+  flex-direction: row;
+  height: 70vh;
+  gap: 16px;
+}
+
+/* ── Left: Preview Area ── */
+
+.pdf-npb-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  overflow: hidden;
+}
+
+.pdf-npb-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  justify-content: center;
+}
+
+.pdf-npb-webview-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+.pdf-npb-webview-wrapper webview {
+  display: block;
+}
+
+.pdf-npb-status {
+  flex: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  padding: 4px 8px;
+  border-top: 1px solid var(--background-modifier-border);
+  text-align: center;
+}
+
+/* ── Right: Controls ── */
+
+.pdf-npb-controls {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.pdf-npb-file-info {
+  font-size: 0.85rem;
+  color: var(--text-normal);
+  padding: 8px 12px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  word-break: break-all;
+}
+
+.pdf-npb-dimensions {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 12px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+}
+
+.pdf-npb-dimensions > div:first-child {
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.pdf-npb-dim-value {
+  font-family: var(--font-monospace);
+  font-size: 0.85rem;
+  color: var(--text-accent);
+  white-space: pre-line;
+}
+
+.pdf-npb-btn-wrapper {
+  margin-top: auto;
+}
+
+.pdf-npb-export-btn {
+  width: 100%;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+}
+
+.pdf-npb-export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

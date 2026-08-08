@@ -1,0 +1,18 @@
+export default {
+  exportCurrentFile: "Export current file to single-page PDF",
+  exportFileMenu: "Export to single-page PDF",
+  exportTitle: "Export to Single-Page PDF",
+  rendering: "Rendering...",
+  pageDimensions: "Page dimensions (auto-calculated):",
+  measuring: "Measuring...",
+  exportPdf: "Export PDF",
+  exporting: "Exporting...",
+  a4Width: "A4 width",
+  contentHeight: "Content height",
+  auto: "auto",
+  contentNotReady: "Content not ready",
+  exportFailed: "Export failed",
+  renderError: "Failed to render markdown for PDF export",
+  notAvailable: "printToPDF is not available on this webview",
+  fileEmpty: "File content is empty",
+};
