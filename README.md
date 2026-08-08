@@ -15,6 +15,12 @@ An Obsidian plugin that exports notes as a single-page PDF without page breaks. 
 
 ## Installation
 
+### From Community Plugins
+
+1. Open Obsidian → Settings → Community Plugins
+2. Click **Browse** and search for "Single Page PDF"
+3. Click **Install**, then **Enable**
+
 ### Manual
 
 1. Download `main.js`, `manifest.json`, `styles.css` from [Releases](https://github.com/ilinuxio/obsidian-single-page-pdf/releases)

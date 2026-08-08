@@ -13,6 +13,12 @@
 
 ## 安装
 
+### 从插件市场安装
+
+1. 打开 Obsidian → 设置 → 社区插件
+2. 点击 **浏览**，搜索 "Single Page PDF"
+3. 点击 **安装**，然后 **启用**
+
 ### 手动安装
 
 1. 从 [Releases](https://github.com/ilinuxio/obsidian-single-page-pdf/releases) 下载 `main.js`、`manifest.json`、`styles.css`

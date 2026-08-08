@@ -1,5 +1,9 @@
 /* ── PDF No Page Break Plugin Styles ── */
 
+.pdf-npb-modal {
+  --dialog-width: 50vw;
+}
+
 .pdf-npb-wrapper {
   display: flex;
   flex-direction: row;

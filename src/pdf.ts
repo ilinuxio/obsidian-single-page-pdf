@@ -81,7 +81,7 @@ export class ExportPdfModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
-    this.containerEl.style.setProperty("--dialog-width", "60vw");
+    this.containerEl.addClass("pdf-npb-modal");
     this.titleEl.setText(this.i18n.exportTitle);
 
     const wrapper = contentEl.createDiv({ cls: "pdf-npb-wrapper" });
