@@ -1,4 +1,4 @@
-import { App, MarkdownView, Plugin, type PluginManifest, TFile } from "obsidian";
+import { MarkdownView, Plugin, TFile } from "obsidian";
 import { ExportPdfModal } from "./pdf";
 import { getLang } from "./i18n";
 

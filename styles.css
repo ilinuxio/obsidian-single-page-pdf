@@ -34,9 +34,10 @@
 .pdf-npb-webview-wrapper {
   position: relative;
   overflow: hidden;
+  margin: 0 auto;
 }
 
-.pdf-npb-webview-wrapper webview {
+.pdf-npb-webview {
   display: block;
 }
 

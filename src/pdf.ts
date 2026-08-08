@@ -1,15 +1,17 @@
 import { App, Modal, Notice, TFile } from "obsidian";
 import { getLang, type Lang } from "./i18n";
 import electron from "electron";
-import { writeFile, readFile } from "fs/promises";
+import { writeFile } from "fs/promises";
 import { getAllStyles, getPatchStyle } from "./styles";
 import { renderMarkdown, makeWebviewJs, A4_WIDTH_PX, A4_WIDTH_MM, MM_PER_INCH, PX_PER_INCH, sleep } from "./render";
+import type { WebviewElement, WebviewWindow, PrintOptions, Dimensions, Measurement } from "./model";
 
 // ── Create Webview ───────────────────────────────────────
 
-function createWebview(): any {
-  const webview = document.createElement("webview") as any;
+function createWebview(): WebviewElement {
+  const webview = document.createElement("webview") as unknown as WebviewElement;
   webview.src = "app://obsidian.md/help.html";
+  webview.className = "pdf-npb-webview";
   webview.setAttribute(
     "style",
     `width:${A4_WIDTH_PX}px;height:100%;display:flex;flex-direction:column;
@@ -23,11 +25,11 @@ function createWebview(): any {
 
 async function exportToPDF(
   outputFile: string,
-  webview: any,
+  webview: WebviewElement,
   pageWidthMm: number,
   pageHeightMm: number,
-) {
-  const printOptions = {
+): Promise<void> {
+  const printOptions: PrintOptions = {
     pageSize: {
       width: pageWidthMm / MM_PER_INCH,
       height: pageHeightMm / MM_PER_INCH,
@@ -46,10 +48,11 @@ async function exportToPDF(
   }
 
   // Fallback: IPC-based approach
-  const ipc = webview.win?.electron?.ipcRenderer;
+  const win = (webview as unknown as { win?: WebviewWindow }).win;
+  const ipc = win?.electron?.ipcRenderer;
   if (ipc) {
     const data = await new Promise<Uint8Array>((resolve) => {
-      ipc.once("print-to-pdf", (_event: any, result: Uint8Array) => resolve(result));
+      ipc.once("print-to-pdf", (_event: unknown, result: Uint8Array) => resolve(result));
       ipc.send("print-to-pdf", { ...printOptions, filepath: outputFile });
     });
     await writeFile(outputFile, data);
@@ -64,10 +67,10 @@ async function exportToPDF(
 export class ExportPdfModal extends Modal {
   private file: TFile;
   private pluginApp: App;
-  private webview?: any;
+  private webview?: WebviewElement;
   private statusEl?: HTMLDivElement;
   private exportBtn?: HTMLButtonElement;
-  private dimensions = { width: 0, height: 0 };
+  private dimensions: Dimensions = { width: 0, height: 0 };
   private i18n: Lang;
 
   constructor(app: App, file: TFile) {
@@ -77,7 +80,7 @@ export class ExportPdfModal extends Modal {
     this.i18n = getLang();
   }
 
-  async onOpen() {
+  async onOpen(): Promise<void> {
     const { contentEl } = this;
     contentEl.empty();
 
@@ -109,18 +112,18 @@ export class ExportPdfModal extends Modal {
       text: this.i18n.exportPdf,
     });
     this.exportBtn.disabled = true;
-    this.exportBtn.addEventListener("click", () => this.handleExport());
+    this.exportBtn.addEventListener("click", () => void this.handleExport());
 
     // ── Render & measure ──
     try {
       const { doc } = await renderMarkdown(this.pluginApp, this.file);
 
       this.webview = createWebview();
-      webviewWrapper.appendChild(this.webview);
+      webviewWrapper.appendChild(this.webview as unknown as Node);
 
       // Wait for webview ready
       await new Promise<void>((resolve) => {
-        const handler = () => {
+        const handler = (): void => {
           this.webview!.removeEventListener("dom-ready", handler);
           resolve();
         };
@@ -129,7 +132,7 @@ export class ExportPdfModal extends Modal {
 
       // Inject styles
       for (const css of getAllStyles()) {
-        await (this.webview as any).insertCSS(css);
+        await this.webview.insertCSS(css);
       }
 
       // Read Obsidian font settings from CSS variables
@@ -141,40 +144,22 @@ export class ExportPdfModal extends Modal {
         textFont = cs.getPropertyValue("--font-text").trim();
         interfaceFont = cs.getPropertyValue("--font-interface").trim();
         monoFont = cs.getPropertyValue("--font-monospace").trim();
-      } catch (e) {}
+      } catch {
+        // CSS variables not available
+      }
 
       // Font is already set on printEl (in renderMarkdown), this is a JS fallback
-      await this.webview!.executeJavaScript(makeWebviewJs(doc, textFont, interfaceFont, monoFont));
+      await this.webview.executeJavaScript(makeWebviewJs(doc, textFont, interfaceFont, monoFont));
 
       // Inject patch styles
       for (const css of getPatchStyle()) {
-        await (this.webview as any).insertCSS(css);
-      }
-
-      // Force user font on webview body (after all CSS injection)
-      try {
-        const basePath = (this.pluginApp.vault.adapter as any).basePath;
-        const appearance = JSON.parse(await readFile(basePath + "/.obsidian/appearance.json", "utf-8"));
-        const userFont = appearance.textFontFamily || "";
-        if (userFont) {
-          await this.webview!.executeJavaScript(
-            `document.body.style.setProperty("font-family", ${JSON.stringify(userFont)}, "important");
-             document.querySelectorAll(".markdown-preview-view,.markdown-rendered,p,li,td,th,a,span,blockquote,code,pre,h1,h2,h3,h4,h5,h6")
-               .forEach(el => el.style.setProperty("font-family", ${JSON.stringify(userFont)}, "important"));`
-          );
-        }
-      } catch (e) {
-        console.warn("Font injection failed:", e);
+        await this.webview.insertCSS(css);
       }
 
       await sleep(500);
 
       // Measure actual content height and the webview's inner width.
-      // The webview has a 1px border, so innerWidth may be slightly less than
-      // A4_WIDTH_PX.  printToPDF renders at A4_WIDTH_PX, meaning the content
-      // is a tiny bit wider and thus shorter (less line-wrapping).  We must
-      // compensate by scaling the measured height by innerWidth/A4_WIDTH_PX.
-      const { bodyHeight, innerWidth } = await this.webview!.executeJavaScript(`
+      const measurement = await this.webview.executeJavaScript<Measurement>(`
         (function() {
           var orig = document.body.style.height;
           document.body.style.height = 'auto';
@@ -185,11 +170,10 @@ export class ExportPdfModal extends Modal {
         })()
       `);
 
-      const widthRatio = (innerWidth || A4_WIDTH_PX) / A4_WIDTH_PX;
-      const contentHeightMm = (bodyHeight / PX_PER_INCH) * MM_PER_INCH * widthRatio;
+      const widthRatio = (measurement.innerWidth || A4_WIDTH_PX) / A4_WIDTH_PX;
+      const contentHeightMm = (measurement.bodyHeight / PX_PER_INCH) * MM_PER_INCH * widthRatio;
 
-      // printToPDF renders content with a slight vertical offset compared to
-      // the webview (~11mm top + ~11mm bottom).  Add this so the content fits.
+      // printToPDF renders content with a slight vertical offset (~11mm top + ~11mm bottom)
       const PDF_HEIGHT_OFFSET = 22;
       const pageHeightMm = contentHeightMm + PDF_HEIGHT_OFFSET;
 
@@ -201,28 +185,34 @@ export class ExportPdfModal extends Modal {
       // Scale webview to fit scroll area width
       const containerWidth = scrollArea.offsetWidth;
       const scale = Math.min(containerWidth / A4_WIDTH_PX, 1);
-      this.webview!.style.transform = `scale(${scale})`;
-      this.webview!.style.height = `${bodyHeight}px`;
-      webviewWrapper.style.height = `${Math.ceil(bodyHeight * scale)}px`;
+      this.webview.style.transform = `scale(${scale})`;
+      this.webview.style.height = `${measurement.bodyHeight}px`;
+      webviewWrapper.style.height = `${Math.ceil(measurement.bodyHeight * scale)}px`;
 
-      dimValue.setText(`${this.dimensions.width}×${this.dimensions.height}mm\n${A4_WIDTH_PX}×${bodyHeight}px`);
+      dimValue.setText(`${this.dimensions.width}×${this.dimensions.height}mm\n${A4_WIDTH_PX}×${measurement.bodyHeight}px`);
       this.statusEl.setText(`${this.i18n.a4Width}: ${A4_WIDTH_MM}mm | ${this.i18n.contentHeight}: ${this.i18n.auto}`);
       this.exportBtn.disabled = false;
     } catch (error) {
       console.error("Render error:", error);
-      this.statusEl.setText(`Error: ${error}`);
+      this.statusEl.setText(`Error: ${String(error)}`);
       new Notice(this.i18n.renderError);
     }
   }
 
-  async handleExport() {
+  async handleExport(): Promise<void> {
     if (!this.webview || this.dimensions.height === 0) {
       new Notice(this.i18n.contentNotReady);
       return;
     }
 
     const title = this.file.basename;
-    const result = await (electron as any).remote.dialog.showSaveDialog({
+    const remote = (electron as unknown as { remote?: { dialog: { showSaveDialog: (options: unknown) => Promise<{ canceled: boolean; filePath?: string }> }; shell: { openPath: (path: string) => void } } }).remote;
+    if (!remote) {
+      new Notice("Electron remote not available");
+      return;
+    }
+
+    const result = await remote.dialog.showSaveDialog({
       title: "Export to PDF",
       defaultPath: title + ".pdf",
       filters: [
@@ -240,17 +230,17 @@ export class ExportPdfModal extends Modal {
     try {
       await exportToPDF(result.filePath, this.webview, A4_WIDTH_MM, this.dimensions.height);
       new Notice(`PDF exported: ${result.filePath}`);
-      (electron as any).remote.shell.openPath(result.filePath);
+      remote.shell.openPath(result.filePath);
       this.close();
     } catch (error) {
       console.error("Export error:", error);
-      new Notice(`${this.i18n.exportFailed}: ${error}`);
+      new Notice(`${this.i18n.exportFailed}: ${String(error)}`);
       this.exportBtn!.textContent = this.i18n.exportPdf;
       this.exportBtn!.disabled = false;
     }
   }
 
-  onClose() {
+  onClose(): void {
     this.contentEl.empty();
   }
 }

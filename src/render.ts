@@ -1,5 +1,4 @@
 import { App, Component, MarkdownRenderer, TFile, type FrontMatterCache } from "obsidian";
-import { readFile } from "fs/promises";
 
 // ── Constants ────────────────────────────────────────────
 export const A4_WIDTH_MM = 210;
@@ -9,9 +8,7 @@ export const A4_WIDTH_PX = Math.round((A4_WIDTH_MM / MM_PER_INCH) * PX_PER_INCH)
 
 // ── Helpers ──────────────────────────────────────────────
 
-export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-type AsyncFn = (...args: unknown[]) => Promise<unknown>;
+export const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 function generateDocId(n: number): string {
   return Array.from({ length: n }, () => ((16 * Math.random()) | 0).toString(16)).join("");
@@ -27,7 +24,7 @@ function getCssclasses(frontMatter: FrontMatterCache): string[] {
   for (const [key, val] of Object.entries(frontMatter)) {
     if (key.toLowerCase() === "cssclass" || key.toLowerCase() === "cssclasses") {
       if (Array.isArray(val)) {
-        cssclasses.push(...val);
+        cssclasses.push(...(val as string[]));
       } else {
         cssclasses.push(val as string);
       }
@@ -81,14 +78,13 @@ export async function renderMarkdown(
   const frontMatter = getFrontMatter(app, file);
   const cssclasses = getCssclasses(frontMatter);
 
-  // Read user font settings from appearance.json
+  // Read user font settings from CSS variables
   let textFont = "";
   try {
-    const basePath = (app.vault.adapter as any).basePath;
-    const appearance = JSON.parse(await readFile(basePath + "/.obsidian/appearance.json", "utf-8"));
-    textFont = appearance.textFontFamily || "";
-  } catch (e) {
-    console.warn("Failed to read appearance.json:", e);
+    const cs = getComputedStyle(document.body);
+    textFont = cs.getPropertyValue("--font-text").trim();
+  } catch {
+    // CSS variables not available
   }
 
   const comp = new Component();
@@ -102,8 +98,9 @@ export async function renderMarkdown(
     cls: "markdown-preview-view markdown-rendered" + cssclasses.join(" "),
   });
 
-  viewEl.toggleClass("rtl", (app.vault as any).getConfig("rightToLeft"));
-  viewEl.toggleClass("show-properties", "hidden" !== (app.vault as any).getConfig("propertiesInDocument"));
+  const vaultConfig = app.vault as unknown as { getConfig: (key: string) => unknown };
+  viewEl.toggleClass("rtl", vaultConfig.getConfig("rightToLeft") as boolean);
+  viewEl.toggleClass("show-properties", "hidden" !== (vaultConfig.getConfig("propertiesInDocument") as string));
 
   const title = frontMatter?.title ?? file.basename;
   viewEl.createEl("h1", { text: title }, (e) => e.addClass("__title__"));
@@ -126,18 +123,18 @@ export async function renderMarkdown(
   });
 
   // Render markdown to HTML fragment
-  const fragment: any = {
-    children: undefined,
-    appendChild(e: DocumentFragment) {
+  const fragment = {
+    children: undefined as HTMLCollection | undefined,
+    appendChild(e: DocumentFragment): void {
       this.children = e?.children;
       throw new Error("exit");
     },
   };
 
-  const promises: AsyncFn[] = [];
+  const promises: Promise<void>[] = [];
   try {
-    await MarkdownRenderer.render(app, lines.join("\n"), fragment, file.path, comp);
-  } catch (_) {
+    await MarkdownRenderer.render(app, lines.join("\n"), fragment as unknown as HTMLElement, file.path, comp);
+  } catch {
     // Expected - fragment trick
   }
 
@@ -147,7 +144,7 @@ export async function renderMarkdown(
   });
   viewEl.appendChild(el);
 
-  await (MarkdownRenderer as any).postProcess(app, {
+  await (MarkdownRenderer as unknown as { postProcess: (app: App, ctx: unknown) => Promise<void> }).postProcess(app, {
     docId: generateDocId(16),
     sourcePath: file.path,
     frontmatter: {},
@@ -185,7 +182,7 @@ export async function renderMarkdown(
   const doc = document.implementation.createHTMLDocument("document");
   doc.body.appendChild(printEl.cloneNode(true));
 
-  // Inject user font as a <style> in doc.head (will be copied to webview via makeWebviewJs)
+  // Inject user font as a <style> in doc.head
   if (textFont) {
     const fontStyle = doc.createElement("style");
     fontStyle.textContent = `body,.markdown-preview-view,.markdown-rendered,p,li,td,th,a,span,blockquote{font-family:${textFont}!important}`;
