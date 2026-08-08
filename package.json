@@ -21,6 +21,9 @@
     "@types/node": "^26.1.2",
     "electron": "^43.3.0",
     "esbuild": "^0.28.1",
+    "eslint": "^9.0.0",
+    "eslint-plugin-obsidianmd": "^0.4.1",
+    "globals": "^16.0.0",
     "obsidian": "latest",
     "typescript": "^5.9.2"
   }
