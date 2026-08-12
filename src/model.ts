@@ -1,3 +1,19 @@
+// ── Page Width Constants ─────────────────────────────────
+
+export const PAGE_WIDTH_MIN = 105;   // A6
+export const PAGE_WIDTH_MAX = 594;   // A1
+export const PAGE_WIDTH_DEFAULT = 210; // A4
+
+// ── Settings ──────────────────────────────────────────────
+
+export interface PageSettings {
+  pageWidthMm: number;
+}
+
+export const DEFAULT_SETTINGS: PageSettings = {
+  pageWidthMm: PAGE_WIDTH_DEFAULT,
+};
+
 // ── Webview Types ────────────────────────────────────────
 
 export interface WebviewElement extends HTMLElement {

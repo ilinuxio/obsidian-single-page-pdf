@@ -3,19 +3,20 @@ import { getLang, type Lang } from "./i18n";
 import electron from "electron";
 import { writeFile } from "fs/promises";
 import { getAllStyles, getPatchStyle } from "./styles";
-import { renderMarkdown, makeWebviewJs, A4_WIDTH_PX, A4_WIDTH_MM, MM_PER_INCH, PX_PER_INCH, sleep } from "./render";
+import { renderMarkdown, makeWebviewJs, mmToPx, MM_PER_INCH, PX_PER_INCH, sleep } from "./render";
 import { validateFilePath, validatePdfData, validatePdfExtension, sanitizeFilename } from "./validate";
+import { PAGE_WIDTH_MIN, PAGE_WIDTH_MAX } from "./model";
 import type { WebviewElement, PrintOptions, Dimensions, Measurement, ElectronRemote, IpcMessageEvent, PdfExporterRequest } from "./model";
 
 // ── Create Webview ───────────────────────────────────────
 
-function createWebview(preloadPath: string): WebviewElement {
+function createWebview(preloadPath: string, pageWidthPx: number): WebviewElement {
   const webview = createEl("webview" as keyof HTMLElementTagNameMap) as unknown as WebviewElement;
   webview.src = "app://obsidian.md/help.html";
   webview.className = "pdf-npb-webview";
   webview.setAttribute(
     "style",
-    `width:${A4_WIDTH_PX}px;height:100%;display:flex;flex-direction:column;
+    `width:${pageWidthPx}px;height:100%;display:flex;flex-direction:column;
      transform-origin:top left;border:1px solid var(--background-modifier-border);`,
   );
 
@@ -158,13 +159,18 @@ export class ExportPdfModal extends Modal {
   private dimensions: Dimensions = { width: 0, height: 0 };
   private i18n: Lang;
   private preloadPath: string;
+  private currentWidthMm: number;
+  private currentWidthPx: number;
+  private widthChangeTimer: number = 0;
 
-  constructor(app: App, file: TFile, preloadPath: string) {
+  constructor(app: App, file: TFile, preloadPath: string, defaultWidthMm: number) {
     super(app);
     this.pluginApp = app;
     this.file = file;
     this.i18n = getLang();
     this.preloadPath = preloadPath;
+    this.currentWidthMm = defaultWidthMm;
+    this.currentWidthPx = mmToPx(defaultWidthMm);
   }
 
   async onOpen(): Promise<void> {
@@ -188,6 +194,57 @@ export class ExportPdfModal extends Modal {
     const controls = wrapper.createDiv({ cls: "pdf-npb-controls" });
     controls.createDiv({ cls: "pdf-npb-file-info", text: `📄 ${this.file.basename}` });
 
+    // ── Width controls (frozen during render) ──
+    const PRESETS = [
+      { label: "A6", width: 105 },
+      { label: "A5", width: 148 },
+      { label: "A4", width: 210 },
+      { label: "A3", width: 297 },
+      { label: "A2", width: 420 },
+      { label: "A1", width: 594 },
+    ];
+
+    const widthContainer = controls.createDiv({ cls: "pdf-npb-width-slider" });
+    const widthLabel = widthContainer.createDiv({ cls: "pdf-npb-width-label" });
+    widthLabel.setText(`${this.i18n.width}: ${this.currentWidthMm}mm`);
+
+    const sliderInput = widthContainer.createEl("input", {
+      type: "range",
+      attr: {
+        min: String(PAGE_WIDTH_MIN),
+        max: String(PAGE_WIDTH_MAX),
+        step: "1",
+        value: String(this.currentWidthMm),
+      },
+    });
+    sliderInput.className = "pdf-npb-slider";
+    sliderInput.disabled = true;
+
+    // Preset buttons (frozen)
+    const presetsRow = widthContainer.createDiv({ cls: "pdf-npb-presets" });
+    const presetBtns: Record<number, HTMLButtonElement> = {};
+
+    const setActivePreset = (width: number): void => {
+      for (const [w, btn] of Object.entries(presetBtns)) {
+        btn.toggleClass("is-active", Number(w) === width);
+      }
+    };
+
+    for (const preset of PRESETS) {
+      const btn = presetsRow.createEl("button", {
+        cls: "pdf-npb-preset-btn",
+        text: preset.label,
+      });
+      btn.disabled = true;
+      presetBtns[preset.width] = btn;
+    }
+
+    // Initial active state
+    const initialPreset = PRESETS.find((p) => p.width === this.currentWidthMm);
+    if (initialPreset) {
+      presetBtns[initialPreset.width]?.toggleClass("is-active", true);
+    }
+
     const dimEl = controls.createDiv({ cls: "pdf-npb-dimensions" });
     dimEl.createDiv({ text: this.i18n.pageDimensions });
     const dimValue = dimEl.createDiv({ cls: "pdf-npb-dim-value" });
@@ -205,7 +262,7 @@ export class ExportPdfModal extends Modal {
     try {
       const { doc } = await renderMarkdown(this.pluginApp, this.file);
 
-      this.webview = createWebview(this.preloadPath);
+      this.webview = createWebview(this.preloadPath, this.currentWidthPx);
       setupIpcMessageHandler(this.webview);
       webviewWrapper.appendChild(this.webview);
 
@@ -256,7 +313,7 @@ export class ExportPdfModal extends Modal {
         })()
       `);
 
-      const widthRatio = (measurement.innerWidth || A4_WIDTH_PX) / A4_WIDTH_PX;
+      const widthRatio = (measurement.innerWidth || this.currentWidthPx) / this.currentWidthPx;
       const contentHeightMm = (measurement.bodyHeight / PX_PER_INCH) * MM_PER_INCH * widthRatio;
 
       // printToPDF renders content with a slight vertical offset (~11mm top + ~11mm bottom)
@@ -264,19 +321,106 @@ export class ExportPdfModal extends Modal {
       const pageHeightMm = contentHeightMm + PDF_HEIGHT_OFFSET;
 
       this.dimensions = {
-        width: A4_WIDTH_MM,
+        width: this.currentWidthMm,
         height: pageHeightMm,
       };
 
-      // Scale webview to fit scroll area width
-      const containerWidth = scrollArea.offsetWidth;
-      const scale = Math.min(containerWidth / A4_WIDTH_PX, 1);
-      this.webview.style.transform = `scale(${scale})`;
-      this.webview.style.height = `${measurement.bodyHeight}px`;
-      webviewWrapper.style.height = `${Math.ceil(measurement.bodyHeight * scale)}px`;
+      // ── Shared pipeline: measure → update dimensions → scale preview → display ──
+      const measureAndUpdate = async (): Promise<void> => {
+        const m = await this.webview!.executeJavaScript<Measurement>(`
+          (function() {
+            var orig = document.body.style.height;
+            document.body.style.height = 'auto';
+            var h = document.body.scrollHeight;
+            var w = window.innerWidth;
+            document.body.style.height = orig;
+            return { bodyHeight: h, innerWidth: w };
+          })()
+        `);
 
-      dimValue.setText(`${this.dimensions.width}×${this.dimensions.height}mm\n${A4_WIDTH_PX}×${measurement.bodyHeight}px`);
-      this.statusEl.setText(`${this.i18n.a4Width}: ${A4_WIDTH_MM}mm | ${this.i18n.contentHeight}: ${this.i18n.auto}`);
+        const ratio = (m.innerWidth || this.currentWidthPx) / this.currentWidthPx;
+        const cHeightMm = (m.bodyHeight / PX_PER_INCH) * MM_PER_INCH * ratio;
+        this.dimensions = {
+          width: this.currentWidthMm,
+          height: cHeightMm + PDF_HEIGHT_OFFSET,
+        };
+
+        // Scale webview to fit scroll area width
+        const cw = scrollArea.offsetWidth;
+        const s = Math.min(cw / this.currentWidthPx, 1);
+        this.webview!.style.transform = `scale(${s})`;
+        this.webview!.style.height = `${m.bodyHeight}px`;
+        webviewWrapper.style.height = `${Math.ceil(m.bodyHeight * s)}px`;
+
+        dimValue.setText(`${this.dimensions.width}×${Math.round(this.dimensions.height)}mm\n${this.currentWidthPx}×${m.bodyHeight}px`);
+        this.statusEl!.setText(`${this.i18n.width}: ${this.currentWidthMm}mm | ${this.i18n.contentHeight}: ${this.i18n.auto}`);
+      };
+
+      // ── Enable width controls (DOM already created, frozen during render) ──
+      sliderInput.disabled = false;
+
+      sliderInput.addEventListener("input", () => {
+        const value = parseInt(sliderInput.value, 10);
+        this.currentWidthMm = value;
+        this.currentWidthPx = mmToPx(value);
+        widthLabel.setText(`${this.i18n.width}: ${value}mm`);
+        setActivePreset(
+          PRESETS.find((p) => p.width === value)?.width ?? -1,
+        );
+
+        window.clearTimeout(this.widthChangeTimer);
+        this.widthChangeTimer = window.setTimeout(() => {
+          void (async () => {
+            try {
+              this.webview!.style.width = `${this.currentWidthPx}px`;
+              await sleep(150);
+              await measureAndUpdate();
+            } catch (err) {
+              console.error("Remeasure error:", err);
+            }
+          })();
+        }, 300);
+      });
+
+      // Enable preset buttons + bind click handlers
+      for (const [width, btn] of Object.entries(presetBtns)) {
+        btn.disabled = false;
+        const w = Number(width);
+        btn.addEventListener("click", () => {
+          if (this.currentWidthMm === w) return;
+          this.currentWidthMm = w;
+          this.currentWidthPx = mmToPx(w);
+          sliderInput.value = String(w);
+          widthLabel.setText(`${this.i18n.width}: ${w}mm`);
+          setActivePreset(w);
+
+          window.clearTimeout(this.widthChangeTimer);
+          this.widthChangeTimer = window.setTimeout(() => {
+            void (async () => {
+              try {
+                this.webview!.style.width = `${this.currentWidthPx}px`;
+                await sleep(150);
+                await measureAndUpdate();
+              } catch (err) {
+                console.error("Remeasure error:", err);
+              }
+            })();
+          }, 100);
+        });
+      }
+
+      // Initial preview setup
+      {
+        const cw = scrollArea.offsetWidth;
+        const s = Math.min(cw / this.currentWidthPx, 1);
+        this.webview.style.transform = `scale(${s})`;
+        this.webview.style.height = `${measurement.bodyHeight}px`;
+        webviewWrapper.style.height = `${Math.ceil(measurement.bodyHeight * s)}px`;
+
+        dimValue.setText(`${this.dimensions.width}×${Math.round(this.dimensions.height)}mm\n${this.currentWidthPx}×${measurement.bodyHeight}px`);
+        this.statusEl.setText(`${this.i18n.width}: ${this.currentWidthMm}mm | ${this.i18n.contentHeight}: ${this.i18n.auto}`);
+      }
+
       this.exportBtn.disabled = false;
     } catch (error) {
       console.error("Render error:", error);
@@ -332,7 +476,7 @@ export class ExportPdfModal extends Modal {
       }
 
       // 3. Export PDF
-      await exportToPDF(result.filePath, this.webview, A4_WIDTH_MM, this.dimensions.height);
+      await exportToPDF(result.filePath, this.webview, this.currentWidthMm, this.dimensions.height);
 
       // 4. Success notification
       new Notice(`PDF exported: ${result.filePath}`);

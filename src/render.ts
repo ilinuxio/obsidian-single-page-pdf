@@ -1,10 +1,12 @@
 import { App, Component, MarkdownRenderer, TFile, type FrontMatterCache } from "obsidian";
 
 // ── Constants ────────────────────────────────────────────
-export const A4_WIDTH_MM = 210;
 export const MM_PER_INCH = 25.4;
 export const PX_PER_INCH = 96;
-export const A4_WIDTH_PX = Math.round((A4_WIDTH_MM / MM_PER_INCH) * PX_PER_INCH); // ~794px
+
+export function mmToPx(mm: number): number {
+  return Math.round((mm / MM_PER_INCH) * PX_PER_INCH);
+}
 
 // ── Helpers ──────────────────────────────────────────────
 
