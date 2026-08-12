@@ -4,11 +4,12 @@ import electron from "electron";
 import { writeFile } from "fs/promises";
 import { getAllStyles, getPatchStyle } from "./styles";
 import { renderMarkdown, makeWebviewJs, A4_WIDTH_PX, A4_WIDTH_MM, MM_PER_INCH, PX_PER_INCH, sleep } from "./render";
-import type { WebviewElement, WebviewWindow, PrintOptions, Dimensions, Measurement } from "./model";
+import { validateFilePath, validatePdfData, validatePdfExtension, sanitizeFilename } from "./validate";
+import type { WebviewElement, PrintOptions, Dimensions, Measurement, ElectronRemote, IpcMessageEvent, PdfExporterRequest } from "./model";
 
 // ── Create Webview ───────────────────────────────────────
 
-function createWebview(): WebviewElement {
+function createWebview(preloadPath: string): WebviewElement {
   const webview = createEl("webview" as keyof HTMLElementTagNameMap) as unknown as WebviewElement;
   webview.src = "app://obsidian.md/help.html";
   webview.className = "pdf-npb-webview";
@@ -17,8 +18,87 @@ function createWebview(): WebviewElement {
     `width:${A4_WIDTH_PX}px;height:100%;display:flex;flex-direction:column;
      transform-origin:top left;border:1px solid var(--background-modifier-border);`,
   );
-  webview.nodeintegration = true;
+
+  // Security: Disable node integration, use preload script
+  webview.setAttribute("nodeintegration", "false");
+  webview.setAttribute("nodeintegrationinsubframes", "false");
+  webview.setAttribute("webpreferences", `contextIsolation=yes, preload=${preloadPath}`);
+
   return webview;
+}
+
+// ── IPC Message Handler ──────────────────────────────────
+
+function setupIpcMessageHandler(webview: WebviewElement): void {
+  const handler = (event: Event): void => {
+    const ipcEvent = event as IpcMessageEvent;
+    if (ipcEvent.channel !== "pdf-exporter-request") return;
+
+    const request = ipcEvent.args[0] as PdfExporterRequest;
+    const { id, channel, data } = request;
+
+    void (async () => {
+      try {
+        let result: unknown;
+
+        switch (channel) {
+          case "show-save-dialog": {
+            const remote = getRemote();
+            result = await remote.dialog.showSaveDialog(data as Parameters<ElectronRemote["dialog"]["showSaveDialog"]>[0]);
+            break;
+          }
+
+          case "save-pdf-to-path": {
+            const { filePath, data: pdfData } = data as { filePath: string; data: ArrayBuffer };
+            const pathResult = validateFilePath(filePath);
+            if (!pathResult.valid) throw new Error(pathResult.error);
+            if (!validatePdfExtension(filePath)) throw new Error("Only PDF files allowed");
+            const pdfResult = validatePdfData(pdfData);
+            if (!pdfResult.valid) throw new Error(pdfResult.error);
+            await writeFile(filePath, Buffer.from(pdfData));
+            result = { success: true, path: filePath, size: pdfData.byteLength };
+            break;
+          }
+
+          case "open-path": {
+            const { filePath } = data as { filePath: string };
+            const pathResult = validateFilePath(filePath);
+            if (!pathResult.valid) throw new Error(pathResult.error);
+            if (!validatePdfExtension(filePath)) throw new Error("Only PDF files can be opened");
+            const remote = getRemote();
+            await remote.shell.openPath(filePath);
+            result = { success: true };
+            break;
+          }
+
+          case "print-to-pdf": {
+            // This should be called directly via webview.printToPDF()
+            throw new Error("Use webview.printToPDF() directly from parent");
+          }
+
+          default:
+            throw new Error(`Unknown channel: ${channel}`);
+        }
+
+        // Send response back to webview
+        webview.send("pdf-exporter-response", { id, result });
+      } catch (error) {
+        webview.send("pdf-exporter-response", { id, error: String(error) });
+      }
+    })();
+  };
+
+  webview.addEventListener("ipc-message", handler);
+}
+
+// ── Helper: Get Electron Remote ──────────────────────────
+
+function getRemote(): ElectronRemote {
+  const remote = (electron as unknown as { remote?: ElectronRemote }).remote;
+  if (!remote) {
+    throw new Error("Electron remote not available");
+  }
+  return remote;
 }
 
 // ── Export PDF ───────────────────────────────────────────
@@ -29,6 +109,16 @@ async function exportToPDF(
   pageWidthMm: number,
   pageHeightMm: number,
 ): Promise<void> {
+  // Validate output path
+  const pathResult = validateFilePath(outputFile);
+  if (!pathResult.valid) {
+    throw new Error(`Invalid output path: ${pathResult.error}`);
+  }
+
+  if (!validatePdfExtension(outputFile)) {
+    throw new Error("Output file must have .pdf extension");
+  }
+
   const printOptions: PrintOptions = {
     pageSize: {
       width: pageWidthMm / MM_PER_INCH,
@@ -40,26 +130,21 @@ async function exportToPDF(
     displayHeaderFooter: false,
   };
 
-  // Try direct webview.printToPDF() (Electron >= 28)
-  if (typeof webview.printToPDF === "function") {
-    const data = await webview.printToPDF(printOptions);
-    await writeFile(outputFile, data);
-    return;
+  // Use webview.printToPDF() directly (Electron >= 28)
+  if (typeof webview.printToPDF !== "function") {
+    throw new Error("printToPDF is not available on this webview");
   }
 
-  // Fallback: IPC-based approach
-  const win = (webview as unknown as { win?: WebviewWindow }).win;
-  const ipc = win?.electron?.ipcRenderer;
-  if (ipc) {
-    const data = await new Promise<Uint8Array>((resolve) => {
-      ipc.once("print-to-pdf", (_event: unknown, result: Uint8Array) => resolve(result));
-      ipc.send("print-to-pdf", { ...printOptions, filepath: outputFile });
-    });
-    await writeFile(outputFile, data);
-    return;
+  const data = await webview.printToPDF(printOptions);
+
+  // Validate generated PDF
+  const pdfResult = validatePdfData(data);
+  if (!pdfResult.valid) {
+    throw new Error(`Generated PDF is invalid: ${pdfResult.error}`);
   }
 
-  throw new Error("printToPDF is not available on this webview");
+  // Save file
+  await writeFile(outputFile, data);
 }
 
 // ── Export Modal ─────────────────────────────────────────
@@ -72,12 +157,14 @@ export class ExportPdfModal extends Modal {
   private exportBtn?: HTMLButtonElement;
   private dimensions: Dimensions = { width: 0, height: 0 };
   private i18n: Lang;
+  private preloadPath: string;
 
-  constructor(app: App, file: TFile) {
+  constructor(app: App, file: TFile, preloadPath: string) {
     super(app);
     this.pluginApp = app;
     this.file = file;
     this.i18n = getLang();
+    this.preloadPath = preloadPath;
   }
 
   async onOpen(): Promise<void> {
@@ -118,7 +205,8 @@ export class ExportPdfModal extends Modal {
     try {
       const { doc } = await renderMarkdown(this.pluginApp, this.file);
 
-      this.webview = createWebview();
+      this.webview = createWebview(this.preloadPath);
+      setupIpcMessageHandler(this.webview);
       webviewWrapper.appendChild(this.webview);
 
       // Wait for webview ready
@@ -137,19 +225,17 @@ export class ExportPdfModal extends Modal {
 
       // Read Obsidian font settings from CSS variables
       let textFont = "";
-      let interfaceFont = "";
       let monoFont = "";
       try {
         const cs = getComputedStyle(document.body);
         textFont = cs.getPropertyValue("--font-text").trim();
-        interfaceFont = cs.getPropertyValue("--font-interface").trim();
         monoFont = cs.getPropertyValue("--font-monospace").trim();
       } catch {
         // CSS variables not available
       }
 
       // Font is already set on printEl (in renderMarkdown), this is a JS fallback
-      await this.webview.executeJavaScript(makeWebviewJs(doc, textFont, interfaceFont, monoFont));
+      await this.webview.executeJavaScript(makeWebviewJs(doc, textFont, monoFont));
 
       // Inject patch styles
       for (const css of getPatchStyle()) {
@@ -205,32 +291,56 @@ export class ExportPdfModal extends Modal {
       return;
     }
 
-    const title = this.file.basename;
-    const remote = (electron as unknown as { remote?: { dialog: { showSaveDialog: (options: unknown) => Promise<{ canceled: boolean; filePath?: string }> }; shell: { openPath: (path: string) => void } } }).remote;
-    if (!remote) {
-      new Notice("Electron remote not available");
-      return;
-    }
-
-    const result = await remote.dialog.showSaveDialog({
-      title: "Export to PDF",
-      defaultPath: title + ".pdf",
-      filters: [
-        { name: "PDF", extensions: ["pdf"] },
-        { name: "All Files", extensions: ["*"] },
-      ],
-      properties: ["showOverwriteConfirmation", "createDirectory"],
-    });
-
-    if (result.canceled || !result.filePath) return;
+    const title = sanitizeFilename(this.file.basename);
 
     this.exportBtn!.textContent = this.i18n.exporting;
     this.exportBtn!.disabled = true;
 
     try {
+      // 1. Show system save dialog via remote
+      const remote = getRemote();
+      const result = await remote.dialog.showSaveDialog({
+        title: this.i18n.exportTitle,
+        defaultPath: `${title}.pdf`,
+        filters: [
+          { name: "PDF", extensions: ["pdf"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+        properties: ["showOverwriteConfirmation", "createDirectory"],
+      });
+
+      if (result.canceled || !result.filePath) {
+        this.exportBtn!.textContent = this.i18n.exportPdf;
+        this.exportBtn!.disabled = false;
+        return;
+      }
+
+      // 2. Validate selected path
+      const pathResult = validateFilePath(result.filePath);
+      if (!pathResult.valid) {
+        new Notice(`Invalid path: ${pathResult.error}`);
+        this.exportBtn!.textContent = this.i18n.exportPdf;
+        this.exportBtn!.disabled = false;
+        return;
+      }
+
+      if (!validatePdfExtension(result.filePath)) {
+        new Notice("Please select a PDF file");
+        this.exportBtn!.textContent = this.i18n.exportPdf;
+        this.exportBtn!.disabled = false;
+        return;
+      }
+
+      // 3. Export PDF
       await exportToPDF(result.filePath, this.webview, A4_WIDTH_MM, this.dimensions.height);
+
+      // 4. Success notification
       new Notice(`PDF exported: ${result.filePath}`);
-      remote.shell.openPath(result.filePath);
+
+      // 5. Open the exported file
+      await remote.shell.openPath(result.filePath);
+
+      // 6. Close modal
       this.close();
     } catch (error) {
       console.error("Export error:", error);

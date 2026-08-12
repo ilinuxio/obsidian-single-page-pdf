@@ -15,4 +15,5 @@ export default {
   renderError: "Failed to render markdown for PDF export",
   notAvailable: "printToPDF is not available on this webview",
   fileEmpty: "File content is empty",
+  pdfExporterNotAvailable: "PDF export API not available. Please restart Obsidian.",
 };

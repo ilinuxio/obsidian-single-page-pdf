@@ -2,19 +2,10 @@
 
 export interface WebviewElement extends HTMLElement {
   src: string;
-  nodeintegration: boolean;
   insertCSS(css: string): Promise<string>;
   executeJavaScript<T = unknown>(code: string): Promise<T>;
   printToPDF?(options: PrintOptions): Promise<Uint8Array>;
-}
-
-export interface WebviewWindow {
-  electron?: {
-    ipcRenderer: {
-      once(channel: string, listener: (event: unknown, result: Uint8Array) => void): void;
-      send(channel: string, data: unknown): void;
-    };
-  };
+  send(channel: string, ...args: unknown[]): void;
 }
 
 // ── PDF Types ────────────────────────────────────────────
@@ -39,8 +30,31 @@ export interface Measurement {
   innerWidth: number;
 }
 
-// ── Appearance Types ─────────────────────────────────────
+// ── Electron Remote Types ────────────────────────────────
 
-export interface AppearanceConfig {
-  textFontFamily?: string;
+export interface ElectronRemote {
+  dialog: {
+    showSaveDialog: (options: {
+      title?: string;
+      defaultPath?: string;
+      filters?: { name: string; extensions: string[] }[];
+      properties?: string[];
+    }) => Promise<{ canceled: boolean; filePath?: string }>;
+  };
+  shell: {
+    openPath: (path: string) => Promise<string>;
+  };
+}
+
+// ── IPC Message Types ────────────────────────────────────
+
+export interface IpcMessageEvent extends Event {
+  channel: string;
+  args: unknown[];
+}
+
+export interface PdfExporterRequest {
+  id: number;
+  channel: string;
+  data: unknown;
 }

@@ -15,4 +15,5 @@ export default {
   renderError: "渲染 Markdown 生成 PDF 失败",
   notAvailable: "当前 webview 不支持 printToPDF",
   fileEmpty: "文件内容为空",
+  pdfExporterNotAvailable: "PDF 导出 API 不可用，请重启 Obsidian。",
 };

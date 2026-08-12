@@ -34,7 +34,7 @@ function getCssclasses(frontMatter: FrontMatterCache): string[] {
 }
 
 /** Generate JavaScript to inject rendered HTML into webview */
-export function makeWebviewJs(doc: Document, fontText: string, fontInterface: string, fontMono: string): string {
+export function makeWebviewJs(doc: Document, fontText: string, fontMono: string): string {
   return `
     document.body.innerHTML = decodeURIComponent(\`${encodeURIComponent(doc.body.innerHTML)}\`);
     document.head.innerHTML = decodeURIComponent(\`${encodeURIComponent(doc.head.innerHTML)}\`);
@@ -54,12 +54,13 @@ export function makeWebviewJs(doc: Document, fontText: string, fontInterface: st
 
     // Apply Obsidian user fonts via inline style (highest priority)
     var _ft = ${JSON.stringify(fontText)};
-    var _fi = ${JSON.stringify(fontInterface)};
     var _fm = ${JSON.stringify(fontMono)};
-    if (_ft) document.body.style.setProperty("font-family", _ft, "important");
-    if (_fi) document.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach(function(h) {
-      h.style.setProperty("font-family", _fi, "important");
-    });
+    if (_ft) {
+      document.body.style.setProperty("font-family", _ft, "important");
+      document.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach(function(h) {
+        h.style.setProperty("font-family", _ft, "important");
+      });
+    }
     if (_fm) document.querySelectorAll("code,pre,kbd,samp").forEach(function(c) {
       c.style.setProperty("font-family", _fm, "important");
     });
@@ -103,7 +104,10 @@ export async function renderMarkdown(
   viewEl.toggleClass("show-properties", "hidden" !== vaultConfig.getConfig("propertiesInDocument"));
 
   const title: string = (frontMatter?.title as string) ?? file.basename;
-  viewEl.createEl("h1", { text: title }, (e) => e.addClass("__title__"));
+  const titleEl = viewEl.createEl("h1", { text: title }, (e) => e.addClass("__title__"));
+  if (textFont) {
+    titleEl.style.setProperty("font-family", textFont, "important");
+  }
 
   // Add block IDs
   const cache = app.metadataCache.getFileCache(file);
