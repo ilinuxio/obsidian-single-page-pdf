@@ -2,7 +2,6 @@ import { MarkdownView, Plugin, TFile } from "obsidian";
 import { ExportPdfModal } from "./pdf";
 import { PdfSettingTab } from "./settings";
 import { getLang } from "./i18n";
-import { PRELOAD_SCRIPT } from "./preload-content";
 import { type PageSettings, DEFAULT_SETTINGS } from "./model";
 
 export default class PdfNoPageBreakPlugin extends Plugin {
@@ -11,9 +10,6 @@ export default class PdfNoPageBreakPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     const i18n = getLang();
-
-    // Write preload script via vault adapter (avoids direct fs usage)
-    const preloadPath = await this.writePreloadScript();
 
     this.addSettingTab(new PdfSettingTab(this.app, this));
 
@@ -25,7 +21,7 @@ export default class PdfNoPageBreakPlugin extends Plugin {
         const file = view?.file;
         if (!file) return false;
         if (checking) return true;
-        new ExportPdfModal(this.app, file, preloadPath, this.settings.pageWidthMm).open();
+        new ExportPdfModal(this.app, file, this.settings.pageWidthMm).open();
         return true;
       },
     });
@@ -39,7 +35,7 @@ export default class PdfNoPageBreakPlugin extends Plugin {
               .setIcon("download")
               .setSection("action")
               .onClick(async () => {
-                new ExportPdfModal(this.app, file, preloadPath, this.settings.pageWidthMm).open();
+                new ExportPdfModal(this.app, file, this.settings.pageWidthMm).open();
               });
           });
         }
@@ -50,20 +46,12 @@ export default class PdfNoPageBreakPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = await this.loadData() as Partial<PageSettings> | undefined;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    // The declarative settings dropdown persists strings; normalize to number
+    const width = Number(this.settings.pageWidthMm);
+    if (Number.isFinite(width)) this.settings.pageWidthMm = width;
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
-  }
-
-  private async writePreloadScript(): Promise<string> {
-    // Write to plugin directory using Obsidian's vault adapter (no raw fs)
-    const preloadRelPath = `${this.app.vault.configDir}/plugins/single-page-pdf/preload.js`;
-    try {
-      await this.app.vault.adapter.write(preloadRelPath, PRELOAD_SCRIPT);
-    } catch {
-      // Plugin directory already writable on desktop; ignore write errors
-    }
-    return `${this.manifest.dir}/preload.js`;
   }
 }

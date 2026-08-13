@@ -21,7 +21,10 @@ export interface WebviewElement extends HTMLElement {
   insertCSS(css: string): Promise<string>;
   executeJavaScript<T = unknown>(code: string): Promise<T>;
   printToPDF?(options: PrintOptions): Promise<Uint8Array>;
-  send(channel: string, ...args: unknown[]): void;
+}
+
+export interface WebviewConsoleMessageEvent extends Event {
+  message: string;
 }
 
 // ── PDF Types ────────────────────────────────────────────
@@ -60,17 +63,4 @@ export interface ElectronRemote {
   shell: {
     openPath: (path: string) => Promise<string>;
   };
-}
-
-// ── IPC Message Types ────────────────────────────────────
-
-export interface IpcMessageEvent extends Event {
-  channel: string;
-  args: unknown[];
-}
-
-export interface PdfExporterRequest {
-  id: number;
-  channel: string;
-  data: unknown;
 }

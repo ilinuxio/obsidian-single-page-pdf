@@ -48,6 +48,11 @@ export function getPatchStyle(): string[] {
 /* Use overlay scrollbar so it doesn't take layout space */
 body { overflow: auto !important; scrollbar-width: none !important; }
 body::-webkit-scrollbar { display: none !important; }
+/* Scrolling happens in the guest page; hide its viewport scrollbar */
+@media screen {
+  html { scrollbar-width: none !important; }
+  html::-webkit-scrollbar { display: none !important; }
+}
 @media print {
   .print .markdown-preview-view { height: auto !important; }
   .md-print-anchor, .blockid {

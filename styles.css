@@ -1,7 +1,7 @@
 /* ── PDF No Page Break Plugin Styles ── */
 
 .pdf-npb-modal {
-  --dialog-width: 50vw;
+  --dialog-width: min(70vw, 1400px);
 }
 
 .pdf-npb-wrapper {
@@ -29,6 +29,48 @@
   overflow-x: hidden;
   display: flex;
   justify-content: center;
+  position: relative;
+}
+
+/* ── Custom Scrollbar Overlay ──
+   The guest page scrolls internally; this overlay mirrors its position
+   and supports dragging. Shown while hovering the preview area. */
+
+.pdf-npb-custom-scrollbar {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: 8px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.pdf-npb-scroll-area:hover .pdf-npb-custom-scrollbar.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pdf-npb-custom-scrollbar.is-dragging {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pdf-npb-custom-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 6px;
+  min-height: 24px;
+  border-radius: 3px;
+  background: var(--background-modifier-border-hover, var(--background-modifier-border));
+}
+
+.pdf-npb-custom-scrollbar-thumb:hover,
+.pdf-npb-custom-scrollbar.is-dragging .pdf-npb-custom-scrollbar-thumb {
+  background: var(--interactive-accent);
 }
 
 .pdf-npb-webview-wrapper {
@@ -121,8 +163,8 @@
   margin-bottom: 8px;
 }
 
-.pdf-npb-slider {
-  width: 100% !important;
+.pdf-npb-width-slider .pdf-npb-slider {
+  width: 100%;
   margin: 4px 0;
 }
 
@@ -155,6 +197,31 @@
   background: var(--interactive-accent);
   color: var(--text-on-accent);
   border-color: var(--interactive-accent);
+}
+
+/* In the settings tab the presets live in the control column:
+   stack the slider and the preset row vertically, keep the buttons
+   in a single horizontal row */
+.pdf-npb-settings-tab .setting-item-control {
+  flex-wrap: wrap;
+}
+
+.pdf-npb-settings-tab .setting-item-control > * {
+  flex-basis: 100%;
+}
+
+.pdf-npb-settings-tab .setting-item-control input[type="range"] {
+  width: 100%;
+}
+
+.pdf-npb-settings-tab .pdf-npb-presets {
+  flex-wrap: nowrap;
+}
+
+.pdf-npb-settings-tab .pdf-npb-preset-btn {
+  min-width: 30px;
+  font-size: 0.65rem;
+  padding: 3px 4px;
 }
 
 /* ── Settings Tab ── */

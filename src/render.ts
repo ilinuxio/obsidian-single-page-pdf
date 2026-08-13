@@ -38,6 +38,35 @@ function getCssclasses(frontMatter: FrontMatterCache): string[] {
 /** Generate JavaScript to inject rendered HTML into webview */
 export function makeWebviewJs(doc: Document, fontText: string, fontMono: string): string {
   return `
+    // The webview swallows wheel events on some configurations (e.g. Windows
+    // at 100% scaling), so drive the scroll manually to make preview
+    // scrolling work everywhere. Attached first so nothing below can
+    // prevent it if a later statement throws.
+    window.addEventListener("wheel", function(e) {
+      var d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * document.documentElement.clientHeight : e.deltaY;
+      e.preventDefault();
+      window.scrollBy(0, d);
+    }, { passive: false });
+
+    // Report the scroll position via console messages so the embedder can
+    // render a custom scrollbar (no preload/IPC channel is available).
+    // Throttled to one report per frame and only when the position changes.
+    var __npbPending = false;
+    var __npbLastKey = "";
+    var __npbReportScroll = function() {
+      if (__npbPending) return;
+      __npbPending = true;
+      window.requestAnimationFrame(function() {
+        __npbPending = false;
+        var key = window.scrollY + "|" + document.documentElement.scrollHeight + "|" + document.documentElement.clientHeight;
+        if (key === __npbLastKey) return;
+        __npbLastKey = key;
+        console.log("__npb_scroll__" + key);
+      });
+    };
+    window.addEventListener("scroll", __npbReportScroll, { passive: true });
+    __npbReportScroll();
+
     document.body.innerHTML = decodeURIComponent(\`${encodeURIComponent(doc.body.innerHTML)}\`);
     document.head.innerHTML = decodeURIComponent(\`${encodeURIComponent(doc.head.innerHTML)}\`);
 

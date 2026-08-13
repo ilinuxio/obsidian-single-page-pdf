@@ -1,10 +1,10 @@
 {
-  "id": "single-page-pdf",
-  "name": "Single Page PDF Export",
-  "version": "1.0.5",
-  "minAppVersion": "1.0.2",
-  "description": "Export notes as single-page PDF without page breaks. Height is auto-calculated from content.",
-  "author": "linuxio",
-  "authorUrl": "https://github.com/ilinuxio",
-  "isDesktopOnly": true
+	"id": "single-page-pdf",
+	"name": "Single Page PDF Export",
+	"version": "1.1.0",
+	"minAppVersion": "1.0.2",
+	"description": "Export notes as single-page PDF without page breaks. Height is auto-calculated from content.",
+	"author": "linuxio",
+	"authorUrl": "https://github.com/ilinuxio",
+	"isDesktopOnly": true
 }

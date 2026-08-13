@@ -1,5 +1,5 @@
 import { PluginSettingTab, Setting } from "obsidian";
-import type { Plugin } from "obsidian";
+import type { Plugin, SettingDefinition } from "obsidian";
 import { getLang } from "./i18n";
 import { PAGE_WIDTH_MIN, PAGE_WIDTH_MAX } from "./model";
 import type PdfNoPageBreakPlugin from "./main";
@@ -27,26 +27,47 @@ export class PdfSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("pdf-npb-settings-tab");
 
+    const setting = new Setting(containerEl)
+      .setName(i18n.pageWidth)
+      .setDesc(i18n.pageWidthDesc);
+    this.buildWidthUi(setting, containerEl);
+  }
+
+  getSettingDefinitions(): SettingDefinition[] {
+    return [
+      {
+        name: getLang().pageWidth,
+        desc: getLang().pageWidthDesc,
+        render: (setting) => {
+          setting.settingEl.addClass("pdf-npb-settings-tab");
+          // Host the preset buttons in the row's control column (right
+          // half), below the slider. Always attached, unlike the row's
+          // parent which is not in the DOM yet while render runs.
+          this.buildWidthUi(setting, setting.controlEl);
+        },
+      },
+    ];
+  }
+
+  /** Slider + A1-A6 preset buttons, shared by display() and render() */
+  private buildWidthUi(setting: Setting, presetsHost: HTMLElement): void {
     let sliderRef: { setValue: (v: number) => void } | null = null;
 
-    new Setting(containerEl)
-      .setName(i18n.pageWidth)
-      .setDesc(i18n.pageWidthDesc)
-      .addSlider((slider) => {
-        sliderRef = { setValue: (v: number) => { slider.setValue(v); } };
-        slider
-          .setLimits(PAGE_WIDTH_MIN, PAGE_WIDTH_MAX, 1)
-          .setValue(this.plugin.settings.pageWidthMm)
-          .onChange((value) => {
-            this.plugin.settings.pageWidthMm = value;
-            void this.plugin.saveSettings().then(() => {
-              updateActivePreset(value);
-            });
+    setting.addSlider((slider) => {
+      sliderRef = { setValue: (v: number) => { slider.setValue(v); } };
+      slider
+        .setLimits(PAGE_WIDTH_MIN, PAGE_WIDTH_MAX, 1)
+        .setValue(this.plugin.settings.pageWidthMm)
+        .onChange((value) => {
+          this.plugin.settings.pageWidthMm = value;
+          void this.plugin.saveSettings().then(() => {
+            updateActivePreset(value);
           });
-      });
+        });
+    });
 
     // Preset buttons
-    const presetsRow = containerEl.createDiv({ cls: "pdf-npb-presets" });
+    const presetsRow = presetsHost.createDiv({ cls: "pdf-npb-presets" });
     const presetBtns: Map<number, HTMLElement> = new Map();
 
     const updateActivePreset = (width: number): void => {

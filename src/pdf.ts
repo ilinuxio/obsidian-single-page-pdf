@@ -6,11 +6,11 @@ import { getAllStyles, getPatchStyle } from "./styles";
 import { renderMarkdown, makeWebviewJs, mmToPx, MM_PER_INCH, PX_PER_INCH, sleep } from "./render";
 import { validateFilePath, validatePdfData, validatePdfExtension, sanitizeFilename } from "./validate";
 import { PAGE_WIDTH_MIN, PAGE_WIDTH_MAX } from "./model";
-import type { WebviewElement, PrintOptions, Dimensions, Measurement, ElectronRemote, IpcMessageEvent, PdfExporterRequest } from "./model";
+import type { WebviewElement, PrintOptions, Dimensions, Measurement, ElectronRemote, WebviewConsoleMessageEvent } from "./model";
 
 // ── Create Webview ───────────────────────────────────────
 
-function createWebview(preloadPath: string, pageWidthPx: number): WebviewElement {
+function createWebview(pageWidthPx: number): WebviewElement {
   const webview = createEl("webview" as keyof HTMLElementTagNameMap) as unknown as WebviewElement;
   webview.src = "app://obsidian.md/help.html";
   webview.className = "pdf-npb-webview";
@@ -20,76 +20,11 @@ function createWebview(preloadPath: string, pageWidthPx: number): WebviewElement
      transform-origin:top left;border:1px solid var(--background-modifier-border);`,
   );
 
-  // Security: Disable node integration, use preload script
+  // Security: Disable node integration
   webview.setAttribute("nodeintegration", "false");
   webview.setAttribute("nodeintegrationinsubframes", "false");
-  webview.setAttribute("webpreferences", `contextIsolation=yes, preload=${preloadPath}`);
 
   return webview;
-}
-
-// ── IPC Message Handler ──────────────────────────────────
-
-function setupIpcMessageHandler(webview: WebviewElement): void {
-  const handler = (event: Event): void => {
-    const ipcEvent = event as IpcMessageEvent;
-    if (ipcEvent.channel !== "pdf-exporter-request") return;
-
-    const request = ipcEvent.args[0] as PdfExporterRequest;
-    const { id, channel, data } = request;
-
-    void (async () => {
-      try {
-        let result: unknown;
-
-        switch (channel) {
-          case "show-save-dialog": {
-            const remote = getRemote();
-            result = await remote.dialog.showSaveDialog(data as Parameters<ElectronRemote["dialog"]["showSaveDialog"]>[0]);
-            break;
-          }
-
-          case "save-pdf-to-path": {
-            const { filePath, data: pdfData } = data as { filePath: string; data: ArrayBuffer };
-            const pathResult = validateFilePath(filePath);
-            if (!pathResult.valid) throw new Error(pathResult.error);
-            if (!validatePdfExtension(filePath)) throw new Error("Only PDF files allowed");
-            const pdfResult = validatePdfData(pdfData);
-            if (!pdfResult.valid) throw new Error(pdfResult.error);
-            await writeFile(filePath, Buffer.from(pdfData));
-            result = { success: true, path: filePath, size: pdfData.byteLength };
-            break;
-          }
-
-          case "open-path": {
-            const { filePath } = data as { filePath: string };
-            const pathResult = validateFilePath(filePath);
-            if (!pathResult.valid) throw new Error(pathResult.error);
-            if (!validatePdfExtension(filePath)) throw new Error("Only PDF files can be opened");
-            const remote = getRemote();
-            await remote.shell.openPath(filePath);
-            result = { success: true };
-            break;
-          }
-
-          case "print-to-pdf": {
-            // This should be called directly via webview.printToPDF()
-            throw new Error("Use webview.printToPDF() directly from parent");
-          }
-
-          default:
-            throw new Error(`Unknown channel: ${channel}`);
-        }
-
-        // Send response back to webview
-        webview.send("pdf-exporter-response", { id, result });
-      } catch (error) {
-        webview.send("pdf-exporter-response", { id, error: String(error) });
-      }
-    })();
-  };
-
-  webview.addEventListener("ipc-message", handler);
 }
 
 // ── Helper: Get Electron Remote ──────────────────────────
@@ -158,19 +93,35 @@ export class ExportPdfModal extends Modal {
   private exportBtn?: HTMLButtonElement;
   private dimensions: Dimensions = { width: 0, height: 0 };
   private i18n: Lang;
-  private preloadPath: string;
   private currentWidthMm: number;
   private currentWidthPx: number;
   private widthChangeTimer: number = 0;
+  private viewHeightPx: number = 0;
+  private wheelHandler?: (e: WheelEvent) => void;
+  private dragMoveHandler?: (e: MouseEvent) => void;
+  private dragUpHandler?: (e: MouseEvent) => void;
 
-  constructor(app: App, file: TFile, preloadPath: string, defaultWidthMm: number) {
+  constructor(app: App, file: TFile, defaultWidthMm: number) {
     super(app);
     this.pluginApp = app;
     this.file = file;
     this.i18n = getLang();
-    this.preloadPath = preloadPath;
     this.currentWidthMm = defaultWidthMm;
     this.currentWidthPx = mmToPx(defaultWidthMm);
+  }
+
+  /** Measure the guest page content height and inner width */
+  private async measureGuest(): Promise<Measurement> {
+    return this.webview!.executeJavaScript<Measurement>(`
+      (function() {
+        var orig = document.body.style.height;
+        document.body.style.height = 'auto';
+        var h = document.body.scrollHeight;
+        var w = window.innerWidth;
+        document.body.style.height = orig;
+        return { bodyHeight: h, innerWidth: w };
+      })()
+    `);
   }
 
   async onOpen(): Promise<void> {
@@ -186,6 +137,10 @@ export class ExportPdfModal extends Modal {
     const previewArea = wrapper.createDiv({ cls: "pdf-npb-preview" });
     const scrollArea = previewArea.createDiv({ cls: "pdf-npb-scroll-area" });
     const webviewWrapper = scrollArea.createDiv({ cls: "pdf-npb-webview-wrapper" });
+
+    // Custom scrollbar overlay (the guest scrolls internally; this mirrors it)
+    const scrollbar = scrollArea.createDiv({ cls: "pdf-npb-custom-scrollbar" });
+    const thumb = scrollbar.createDiv({ cls: "pdf-npb-custom-scrollbar-thumb" });
 
     this.statusEl = previewArea.createDiv({ cls: "pdf-npb-status" });
     this.statusEl.setText(this.i18n.rendering);
@@ -262,8 +217,100 @@ export class ExportPdfModal extends Modal {
     try {
       const { doc } = await renderMarkdown(this.pluginApp, this.file);
 
-      this.webview = createWebview(this.preloadPath, this.currentWidthPx);
-      setupIpcMessageHandler(this.webview);
+      this.webview = createWebview(this.currentWidthPx);
+
+      // Fallback: if wheel events land on the embedder (over the preview
+      // area, or when input routing skips the webview), drive the guest
+      // scroll directly. Document-level capture so nothing above can
+      // swallow the event before us. Removed in onClose().
+      this.wheelHandler = (e: WheelEvent): void => {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest(".pdf-npb-preview") == null || !this.webview) return;
+        const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 600 : e.deltaY;
+        void this.webview.executeJavaScript(`(function(){ window.scrollBy(0, ${d}); return window.scrollY; })()`);
+      };
+      document.addEventListener("wheel", this.wheelHandler, true);
+
+      // ── Custom scrollbar: mirror the guest scroll position ──
+      // The guest reports via document.title; this listens for
+      // "page-title-updated" and positions the overlay thumb.
+      let lastScroll = { y: 0, sh: 0, ch: 0 };
+      let rafPending = false;
+      let pendingScrollTo = 0;
+
+      const updateThumb = (y: number, sh: number, ch: number): void => {
+        lastScroll = { y, sh, ch };
+        const scrollable = sh > ch + 1;
+        scrollbar.toggleClass("is-visible", scrollable);
+        if (!scrollable) return;
+        const trackH = scrollbar.clientHeight;
+        const thumbH = Math.max(24, (ch / sh) * trackH);
+        const maxTop = trackH - thumbH;
+        const top = Math.min(maxTop, (y / Math.max(1, sh - ch)) * maxTop);
+        thumb.style.height = `${thumbH}px`;
+        thumb.style.top = `${top}px`;
+      };
+
+      const scrollGuestTo = (y: number): void => {
+        pendingScrollTo = y;
+        if (rafPending) return;
+        rafPending = true;
+        window.requestAnimationFrame(() => {
+          rafPending = false;
+          void this.webview!.executeJavaScript(`window.scrollTo(0, ${pendingScrollTo})`);
+        });
+      };
+
+      this.webview.addEventListener("console-message", (event) => {
+        const msg = (event as WebviewConsoleMessageEvent).message;
+        if (typeof msg !== "string" || !msg.startsWith("__npb_scroll__")) return;
+        const parts = msg.slice("__npb_scroll__".length).split("|");
+        const y = Number(parts[0]);
+        const sh = Number(parts[1]);
+        const ch = Number(parts[2]);
+        if (Number.isFinite(y) && Number.isFinite(sh) && Number.isFinite(ch)) updateThumb(y, sh, ch);
+      });
+
+      const positionFromMouse = (e: MouseEvent): number => {
+        const rect = scrollbar.getBoundingClientRect();
+        const thumbH = thumb.offsetHeight;
+        const maxTop = Math.max(1, rect.height - thumbH);
+        const ratio = Math.max(0, Math.min(1, (e.clientY - rect.top - thumbH / 2) / maxTop));
+        return ratio * Math.max(0, lastScroll.sh - lastScroll.ch);
+      };
+
+      // Click on the track: jump to that position
+      scrollbar.addEventListener("mousedown", (e) => {
+        if (e.target !== scrollbar) return;
+        e.preventDefault();
+        scrollGuestTo(positionFromMouse(e));
+      });
+
+      // Drag the thumb
+      thumb.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        scrollbar.addClass("is-dragging");
+        const startY = e.clientY;
+        const startScroll = lastScroll.y;
+        const range = Math.max(1, lastScroll.sh - lastScroll.ch);
+        const maxTop = Math.max(1, scrollbar.clientHeight - thumb.offsetHeight);
+
+        this.dragMoveHandler = (ev: MouseEvent): void => {
+          const delta = ((ev.clientY - startY) / maxTop) * range;
+          scrollGuestTo(startScroll + delta);
+        };
+        this.dragUpHandler = (): void => {
+          scrollbar.removeClass("is-dragging");
+          document.removeEventListener("mousemove", this.dragMoveHandler!);
+          document.removeEventListener("mouseup", this.dragUpHandler!);
+          this.dragMoveHandler = undefined;
+          this.dragUpHandler = undefined;
+        };
+        document.addEventListener("mousemove", this.dragMoveHandler);
+        document.addEventListener("mouseup", this.dragUpHandler);
+      });
+
       webviewWrapper.appendChild(this.webview);
 
       // Wait for webview ready
@@ -302,16 +349,7 @@ export class ExportPdfModal extends Modal {
       await sleep(500);
 
       // Measure actual content height and the webview's inner width.
-      const measurement = await this.webview.executeJavaScript<Measurement>(`
-        (function() {
-          var orig = document.body.style.height;
-          document.body.style.height = 'auto';
-          var h = document.body.scrollHeight;
-          var w = window.innerWidth;
-          document.body.style.height = orig;
-          return { bodyHeight: h, innerWidth: w };
-        })()
-      `);
+      const measurement = await this.measureGuest();
 
       const widthRatio = (measurement.innerWidth || this.currentWidthPx) / this.currentWidthPx;
       const contentHeightMm = (measurement.bodyHeight / PX_PER_INCH) * MM_PER_INCH * widthRatio;
@@ -327,16 +365,7 @@ export class ExportPdfModal extends Modal {
 
       // ── Shared pipeline: measure → update dimensions → scale preview → display ──
       const measureAndUpdate = async (): Promise<void> => {
-        const m = await this.webview!.executeJavaScript<Measurement>(`
-          (function() {
-            var orig = document.body.style.height;
-            document.body.style.height = 'auto';
-            var h = document.body.scrollHeight;
-            var w = window.innerWidth;
-            document.body.style.height = orig;
-            return { bodyHeight: h, innerWidth: w };
-          })()
-        `);
+        const m = await this.measureGuest();
 
         const ratio = (m.innerWidth || this.currentWidthPx) / this.currentWidthPx;
         const cHeightMm = (m.bodyHeight / PX_PER_INCH) * MM_PER_INCH * ratio;
@@ -345,15 +374,24 @@ export class ExportPdfModal extends Modal {
           height: cHeightMm + PDF_HEIGHT_OFFSET,
         };
 
-        // Scale webview to fit scroll area width
+        // Scale webview to fit scroll area width.
+        // The webview is sized taller than the viewport by 1/s so that,
+        // after the transform scale, the preview fills the whole area
+        // (otherwise a blank strip remains below at scales < 1).
         const cw = scrollArea.offsetWidth;
         const s = Math.min(cw / this.currentWidthPx, 1);
+        const viewH = scrollArea.clientHeight;
+        const webviewH = Math.ceil(viewH / s);
+        this.viewHeightPx = webviewH;
         this.webview!.style.transform = `scale(${s})`;
-        this.webview!.style.height = `${m.bodyHeight}px`;
-        webviewWrapper.style.height = `${Math.ceil(m.bodyHeight * s)}px`;
+        this.webview!.style.height = `${webviewH}px`;
+        webviewWrapper.style.height = `${viewH}px`;
 
         dimValue.setText(`${this.dimensions.width}×${Math.round(this.dimensions.height)}mm\n${this.currentWidthPx}×${m.bodyHeight}px`);
         this.statusEl!.setText(`${this.i18n.width}: ${this.currentWidthMm}mm | ${this.i18n.contentHeight}: ${this.i18n.auto}`);
+
+        // Reflow changed the guest metrics; ask it to re-report for the scrollbar
+        void this.webview!.executeJavaScript(`window.dispatchEvent(new Event("scroll"))`);
       };
 
       // ── Enable width controls (DOM already created, frozen during render) ──
@@ -413,12 +451,18 @@ export class ExportPdfModal extends Modal {
       {
         const cw = scrollArea.offsetWidth;
         const s = Math.min(cw / this.currentWidthPx, 1);
+        const viewH = scrollArea.clientHeight;
+        const webviewH = Math.ceil(viewH / s);
+        this.viewHeightPx = webviewH;
         this.webview.style.transform = `scale(${s})`;
-        this.webview.style.height = `${measurement.bodyHeight}px`;
-        webviewWrapper.style.height = `${Math.ceil(measurement.bodyHeight * s)}px`;
+        this.webview.style.height = `${webviewH}px`;
+        webviewWrapper.style.height = `${viewH}px`;
 
         dimValue.setText(`${this.dimensions.width}×${Math.round(this.dimensions.height)}mm\n${this.currentWidthPx}×${measurement.bodyHeight}px`);
         this.statusEl.setText(`${this.i18n.width}: ${this.currentWidthMm}mm | ${this.i18n.contentHeight}: ${this.i18n.auto}`);
+
+        // Re-report the guest metrics now that the webview is sized
+        void this.webview.executeJavaScript(`window.dispatchEvent(new Event("scroll"))`);
       }
 
       this.exportBtn.disabled = false;
@@ -476,7 +520,16 @@ export class ExportPdfModal extends Modal {
       }
 
       // 3. Export PDF
-      await exportToPDF(result.filePath, this.webview, this.currentWidthMm, this.dimensions.height);
+      // Restore the full content height so the print viewport matches the
+      // original design (webview as tall as the document) during printing.
+      const exportMeasure = await this.measureGuest();
+      this.webview.style.height = `${exportMeasure.bodyHeight}px`;
+      await sleep(100);
+      try {
+        await exportToPDF(result.filePath, this.webview, this.currentWidthMm, this.dimensions.height);
+      } finally {
+        this.webview.style.height = `${this.viewHeightPx}px`;
+      }
 
       // 4. Success notification
       new Notice(`PDF exported: ${result.filePath}`);
@@ -495,6 +548,18 @@ export class ExportPdfModal extends Modal {
   }
 
   onClose(): void {
+    if (this.wheelHandler) {
+      document.removeEventListener("wheel", this.wheelHandler, true);
+      this.wheelHandler = undefined;
+    }
+    if (this.dragMoveHandler) {
+      document.removeEventListener("mousemove", this.dragMoveHandler);
+      this.dragMoveHandler = undefined;
+    }
+    if (this.dragUpHandler) {
+      document.removeEventListener("mouseup", this.dragUpHandler);
+      this.dragUpHandler = undefined;
+    }
     this.contentEl.empty();
   }
 }
