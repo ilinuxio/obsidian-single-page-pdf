@@ -71,6 +71,18 @@ export function validatePdfData(data: ArrayBuffer | Uint8Array): { valid: boolea
   return { valid: true };
 }
 
+/**
+ * Count the pages of a generated PDF
+ * - The page count is needed to detect that content did not fit on one page
+ * - Chromium's PDF writer emits uncompressed page dictionaries, so page
+ *   objects can be counted directly
+ * - Returns 0 when the count cannot be determined
+ */
+export function countPdfPages(data: Uint8Array): number {
+  const text = new TextDecoder("latin1").decode(data);
+  return text.match(/\/Type\s*\/Page(?![a-zA-Z])/g)?.length ?? 0;
+}
+
 // ── Filename Sanitization ────────────────────────────────
 
 /**

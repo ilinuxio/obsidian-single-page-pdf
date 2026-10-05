@@ -32,7 +32,12 @@ export interface WebviewConsoleMessageEvent extends Event {
 export interface PrintOptions {
   pageSize: { width: number; height: number };
   scale: number;
-  margins: { marginType: string };
+  /**
+   * Explicit margins in inches. Note: printToPDF() ignores the print()-style
+   * `{ marginType }` object and falls back to its 0.4in default margins, which
+   * pushes the end of a page-sized document onto a second page.
+   */
+  margins: { top: number; bottom: number; left: number; right: number };
   printBackground: boolean;
   displayHeaderFooter: false;
 }

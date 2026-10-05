@@ -4,7 +4,7 @@ import electron from "electron";
 import { writeFile } from "fs/promises";
 import { getAllStyles, getPatchStyle } from "./styles";
 import { renderMarkdown, makeWebviewJs, mmToPx, MM_PER_INCH, PX_PER_INCH, sleep } from "./render";
-import { validateFilePath, validatePdfData, validatePdfExtension, sanitizeFilename } from "./validate";
+import { validateFilePath, validatePdfData, validatePdfExtension, sanitizeFilename, countPdfPages } from "./validate";
 import { PAGE_WIDTH_MIN, PAGE_WIDTH_MAX } from "./model";
 import type { WebviewElement, PrintOptions, Dimensions, Measurement, ElectronRemote, WebviewConsoleMessageEvent } from "./model";
 
@@ -37,14 +37,57 @@ function getRemote(): ElectronRemote {
   return remote;
 }
 
+// ── Page Height Safety Margin ────────────────────────────
+// The printed layout can be slightly taller than the measured one (trailing
+// leading, image scaling), so the page is printed a little taller than the
+// content. If the export still spills onto a second page, it is retried with
+// a larger margin before giving up.
+const DEFAULT_SLACK_MM = 8;
+const PAGE_HEIGHT_SLACK_MM = [DEFAULT_SLACK_MM, 48, 256, 1024];
+
+// Chromium refuses a print page taller than 65536 PDF points (2^16 pt =
+// 910.22in = 23119.6mm) with "Printing failed" — it does not clamp or split,
+// the whole export fails. Verified on Electron 43 (Obsidian 1.13.x):
+// 65534pt prints, 65537pt fails. Keep a small margin below the hard limit.
+const MAX_PAGE_HEIGHT_MM = 23100;
+
+// ── Build Print Options ──────────────────────────────────
+
+function buildPrintOptions(
+  measurement: Measurement,
+  pageWidthPx: number,
+  slackMm: number,
+): PrintOptions {
+  // Print the page at the guest's measured CSS pixel width, not at the width
+  // in mm: mmToPx() rounds, and a print layout narrower than the measured one
+  // re-wraps the text and makes it taller than the page.
+  const pageWidthPxActual = measurement.innerWidth > 0 ? measurement.innerWidth : pageWidthPx;
+  const slackPx = (slackMm / MM_PER_INCH) * PX_PER_INCH;
+
+  return {
+    pageSize: {
+      width: pageWidthPxActual / PX_PER_INCH,
+      height: (measurement.bodyHeight + slackPx) / PX_PER_INCH,
+    },
+    scale: 1,
+    // printToPDF() ignores margins.marginType and then falls back to its
+    // default margins (0.4in on every side). Those shrink the printable area
+    // below the page size, which pushes the end of the document onto a
+    // second page.
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    printBackground: true,
+    displayHeaderFooter: false,
+  };
+}
+
 // ── Export PDF ───────────────────────────────────────────
 
 async function exportToPDF(
   outputFile: string,
   webview: WebviewElement,
-  pageWidthMm: number,
-  pageHeightMm: number,
-): Promise<void> {
+  measurement: Measurement,
+  pageWidthPx: number,
+): Promise<number> {
   // Validate output path
   const pathResult = validateFilePath(outputFile);
   if (!pathResult.valid) {
@@ -55,23 +98,22 @@ async function exportToPDF(
     throw new Error("Output file must have .pdf extension");
   }
 
-  const printOptions: PrintOptions = {
-    pageSize: {
-      width: pageWidthMm / MM_PER_INCH,
-      height: pageHeightMm / MM_PER_INCH,
-    },
-    scale: 1,
-    margins: { marginType: "none" },
-    printBackground: true,
-    displayHeaderFooter: false,
-  };
-
   // Use webview.printToPDF() directly (Electron >= 28)
-  if (typeof webview.printToPDF !== "function") {
+  const printToPDF = webview.printToPDF?.bind(webview);
+  if (!printToPDF) {
     throw new Error("printToPDF is not available on this webview");
   }
 
-  const data = await webview.printToPDF(printOptions);
+  // Print, then verify that everything landed on one page. The printed layout
+  // can be taller than the measured one, in which case the page size is
+  // increased and the export retried.
+  let data: Uint8Array = new Uint8Array(0);
+  let pages = 0;
+  for (const slackMm of PAGE_HEIGHT_SLACK_MM) {
+    data = await printToPDF(buildPrintOptions(measurement, pageWidthPx, slackMm));
+    pages = countPdfPages(data);
+    if (pages <= 1) break;
+  }
 
   // Validate generated PDF
   const pdfResult = validatePdfData(data);
@@ -81,6 +123,8 @@ async function exportToPDF(
 
   // Save file
   await writeFile(outputFile, data);
+
+  return pages;
 }
 
 // ── Export Modal ─────────────────────────────────────────
@@ -90,6 +134,7 @@ export class ExportPdfModal extends Modal {
   private pluginApp: App;
   private webview?: WebviewElement;
   private statusEl?: HTMLDivElement;
+  private warnEl?: HTMLDivElement;
   private exportBtn?: HTMLButtonElement;
   private dimensions: Dimensions = { width: 0, height: 0 };
   private i18n: Lang;
@@ -124,6 +169,20 @@ export class ExportPdfModal extends Modal {
     `);
   }
 
+  /** Warn in the preview when the content is too tall to print on one page */
+  private updateTootallWarning(contentHeightMm: number): void {
+    if (!this.warnEl) return;
+    const tooTall = contentHeightMm + DEFAULT_SLACK_MM > MAX_PAGE_HEIGHT_MM;
+    this.warnEl.toggleClass("is-visible", tooTall);
+    if (tooTall) {
+      this.warnEl.setText(
+        this.i18n.tooTallWarning
+          .replace("{height}", String(Math.round(contentHeightMm)))
+          .replace("{limit}", String(MAX_PAGE_HEIGHT_MM)),
+      );
+    }
+  }
+
   async onOpen(): Promise<void> {
     const { contentEl } = this;
     contentEl.empty();
@@ -141,6 +200,8 @@ export class ExportPdfModal extends Modal {
     // Custom scrollbar overlay (the guest scrolls internally; this mirrors it)
     const scrollbar = scrollArea.createDiv({ cls: "pdf-npb-custom-scrollbar" });
     const thumb = scrollbar.createDiv({ cls: "pdf-npb-custom-scrollbar-thumb" });
+
+    this.warnEl = previewArea.createDiv({ cls: "pdf-npb-warning" });
 
     this.statusEl = previewArea.createDiv({ cls: "pdf-npb-status" });
     this.statusEl.setText(this.i18n.rendering);
@@ -354,14 +415,15 @@ export class ExportPdfModal extends Modal {
       const widthRatio = (measurement.innerWidth || this.currentWidthPx) / this.currentWidthPx;
       const contentHeightMm = (measurement.bodyHeight / PX_PER_INCH) * MM_PER_INCH * widthRatio;
 
-      // printToPDF renders content with a slight vertical offset (~11mm top + ~11mm bottom)
-      const PDF_HEIGHT_OFFSET = 22;
-      const pageHeightMm = contentHeightMm + PDF_HEIGHT_OFFSET;
+      // Page height = content height + the default safety margin used on export
+      const pageHeightMm = contentHeightMm + DEFAULT_SLACK_MM;
 
       this.dimensions = {
         width: this.currentWidthMm,
         height: pageHeightMm,
       };
+
+      this.updateTootallWarning(contentHeightMm);
 
       // ── Shared pipeline: measure → update dimensions → scale preview → display ──
       const measureAndUpdate = async (): Promise<void> => {
@@ -371,8 +433,10 @@ export class ExportPdfModal extends Modal {
         const cHeightMm = (m.bodyHeight / PX_PER_INCH) * MM_PER_INCH * ratio;
         this.dimensions = {
           width: this.currentWidthMm,
-          height: cHeightMm + PDF_HEIGHT_OFFSET,
+          height: cHeightMm + DEFAULT_SLACK_MM,
         };
+
+        this.updateTootallWarning(cHeightMm);
 
         // Scale webview to fit scroll area width.
         // The webview is sized taller than the viewport by 1/s so that,
@@ -479,6 +543,17 @@ export class ExportPdfModal extends Modal {
       return;
     }
 
+    // Chromium cannot print a page past MAX_PAGE_HEIGHT_MM at all — the same
+    // message is shown in the preview, so don't start a doomed export.
+    if (this.dimensions.height > MAX_PAGE_HEIGHT_MM) {
+      new Notice(
+        this.i18n.tooTallWarning
+          .replace("{height}", String(Math.round(this.dimensions.height - DEFAULT_SLACK_MM)))
+          .replace("{limit}", String(MAX_PAGE_HEIGHT_MM)),
+      );
+      return;
+    }
+
     const title = sanitizeFilename(this.file.basename);
 
     this.exportBtn!.textContent = this.i18n.exporting;
@@ -525,14 +600,20 @@ export class ExportPdfModal extends Modal {
       const exportMeasure = await this.measureGuest();
       this.webview.style.height = `${exportMeasure.bodyHeight}px`;
       await sleep(100);
+
+      let pages: number;
       try {
-        await exportToPDF(result.filePath, this.webview, this.currentWidthMm, this.dimensions.height);
+        pages = await exportToPDF(result.filePath, this.webview, exportMeasure, this.currentWidthPx);
       } finally {
         this.webview.style.height = `${this.viewHeightPx}px`;
       }
 
-      // 4. Success notification
-      new Notice(`PDF exported: ${result.filePath}`);
+      // 4. Success notification (or a warning when the content did not fit)
+      if (pages > 1) {
+        new Notice(this.i18n.multiPageWarning.replace("{count}", String(pages)), 10000);
+      } else {
+        new Notice(`PDF exported: ${result.filePath}`);
+      }
 
       // 5. Open the exported file
       await remote.shell.openPath(result.filePath);

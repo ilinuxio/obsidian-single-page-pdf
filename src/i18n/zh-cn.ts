@@ -18,4 +18,6 @@ export default {
   notAvailable: "当前 webview 不支持 printToPDF",
   fileEmpty: "文件内容为空",
   pdfExporterNotAvailable: "PDF 导出 API 不可用，请重启 Obsidian。",
+  multiPageWarning: "内容过高，无法放入单页 —— PDF 已导出为 {count} 页。",
+  tooTallWarning: "内容高度 {height}mm，超过单页上限 {limit}mm，导出将失败。加宽页面只在正文会自动折行时能减少高度；否则请拆分文档。",
 };

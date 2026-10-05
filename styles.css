@@ -83,6 +83,27 @@
   display: block;
 }
 
+/* ── Single-Page Limit Warning ── */
+
+.pdf-npb-warning {
+  display: none;
+  flex: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  /* Red text on the normal background: --background-modifier-error is a solid
+     red in some themes, which made red-on-red text invisible */
+  color: var(--text-error);
+  background: var(--background-primary);
+  padding: 6px 10px;
+  /* border-top: 1px solid var(--text-error); */
+  text-align: center;
+}
+
+.pdf-npb-warning.is-visible {
+  display: block;
+}
+
 .pdf-npb-status {
   flex: 0;
   font-size: 0.7rem;

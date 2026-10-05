@@ -18,4 +18,6 @@ export default {
   notAvailable: "printToPDF is not available on this webview",
   fileEmpty: "File content is empty",
   pdfExporterNotAvailable: "PDF export API not available. Please restart Obsidian.",
+  multiPageWarning: "Content is too tall to fit on a single page — the PDF was exported on {count} pages.",
+  tooTallWarning: "Content is {height}mm tall, beyond the {limit}mm single-page limit — export will fail. A wider page only reduces the height when text re-wraps; otherwise split the document.",
 };
